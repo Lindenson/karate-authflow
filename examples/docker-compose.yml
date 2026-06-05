@@ -1,0 +1,32 @@
+services:
+  # Ory Kratos with an in-memory database (data is reset on restart).
+  kratos:
+    image: oryd/kratos:v1.3.1
+    ports:
+      - "4433:4433" # public API (login flow lives here)
+      - "4434:4434" # admin API (used once to seed the demo user)
+    command: serve -c /etc/config/kratos/kratos.yml --dev
+    volumes:
+      - ./kratos:/etc/config/kratos:ro
+    environment:
+      - DSN=memory
+    restart: unless-stopped
+
+  # One-shot: waits for Kratos, then creates the demo identity with a password
+  # so the example can log in immediately. Exits 0 when done.
+  seed:
+    image: curlimages/curl:8.11.1
+    depends_on:
+      - kratos
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        echo "waiting for Kratos admin API...";
+        until curl -sf http://kratos:4434/health/ready >/dev/null; do sleep 2; done;
+        echo "seeding demo@example.com ...";
+        code=$$(curl -s -o /tmp/out -w '%{http_code}' -X POST http://kratos:4434/admin/identities \
+          -H 'Content-Type: application/json' \
+          -d '{"schema_id":"default","traits":{"email":"demo@example.com"},"credentials":{"password":{"config":{"password":"KarateAuthflowDemo123"}}}}');
+        echo "admin/identities -> HTTP $$code"; cat /tmp/out; echo;
+        if [ "$$code" = "201" ] || [ "$$code" = "409" ]; then echo "SEED OK ($$code)"; else echo "SEED FAILED"; exit 1; fi
+    restart: "no"
