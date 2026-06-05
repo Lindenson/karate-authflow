@@ -72,6 +72,23 @@ class OrdersTest {
 Every request in every scenario now carries `Authorization: Basic …` — and the
 feature file never mentions it.
 
+### Session auth with Ory Kratos
+
+For systems behind [Ory Kratos](https://www.ory.sh/kratos/), `KratosSessionStrategy`
+performs the Kratos **browser login flow** once (initialize flow → submit
+identifier/password with the CSRF token), captures the `ory_kratos_session`
+cookie, and injects it on every subsequent request:
+
+```java
+KarateAuth.register(
+        Runner.path("classpath:features"),
+        new KratosSessionStrategy("https://auth.example.com", "alice@example.com", "s3cret"))
+    .parallel(5);
+```
+
+Login is lazy (on the first request), happens exactly once, and is thread-safe
+under parallel execution. Automatic re-login on `401` is planned.
+
 ## How it works
 
 `karate-authflow` registers a Karate `RuntimeHook` that, before each HTTP call,
@@ -114,8 +131,9 @@ scenarios under `Runner.parallel(n)`.
 | Scenario | What it does | Status |
 |---|---|---|
 | **Basic** | Inject an `Authorization: Basic` header on every request | ✅ available |
+| **Session (Ory Kratos)** | Log in once via the Kratos browser flow, reuse the `ory_kratos_session` cookie on every request | ✅ available |
 | **Bearer / token** | Inject a bearer token | planned |
-| **Session** | Log in once, reuse cookie/token across tests, refresh on `401` | planned |
+| **Session refresh** | Re-login automatically on `401` | planned |
 | **Crypto** 🔑 | Derive a session key and selectively encrypt JSON fields / sign the body before send | planned |
 
 The crypto layer is the project's reason to exist — Karate has no native support

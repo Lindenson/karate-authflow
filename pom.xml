@@ -49,6 +49,9 @@
 
         <karate.version>1.5.2</karate.version>
         <junit.version>5.10.2</junit.version>
+        <!-- Supplied transitively by Karate at the consumer's runtime; declared
+             `provided` here only so we can parse the Kratos flow JSON at compile time. -->
+        <jackson.version>2.19.2</jackson.version>
 
         <!-- JUnit5 tags excluded from the default build. Override with
              `-Dauthflow.test.excludedGroups=` to run network ("live") tests. -->
@@ -69,6 +72,12 @@
             <groupId>io.karatelabs</groupId>
             <artifactId>karate-core</artifactId>
             <version>${karate.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
             <scope>provided</scope>
         </dependency>
 
