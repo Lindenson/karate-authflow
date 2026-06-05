@@ -66,4 +66,11 @@ public interface AuthRequest {
 
     /** @return the request body decoded as a string, or {@code null} if absent. */
     String bodyAsString();
+
+    /**
+     * @return a token identifying the current scenario, stable across all of its
+     *         requests and distinct between scenarios — use it to partition
+     *         per-scenario state in a shared strategy instance
+     */
+    String scenarioId();
 }

@@ -34,16 +34,29 @@ public interface KarateBinding {
     String id();
 
     /**
-     * Create a Karate-native hook object that invokes {@code interceptor} before
-     * every HTTP call.
+     * Create a Karate-native hook object that invokes {@code request} before every
+     * HTTP call. Equivalent to {@link #createHook(PreRequestInterceptor, PostResponseInterceptor)}
+     * with no response interceptor.
      *
-     * <p>The return type is {@link Object} on purpose, to keep this interface free
-     * of Karate types. Callers obtain the hook here and register it with their
-     * Karate runner through the binding's version-specific helper (for Karate 1.x,
-     * {@link KarateV1Binding#register}).
-     *
-     * @param interceptor the pre-request callback to wire in
+     * @param request the pre-request callback to wire in
      * @return a Karate-native hook instance
      */
-    Object createHook(PreRequestInterceptor interceptor);
+    default Object createHook(PreRequestInterceptor request) {
+        return createHook(request, null);
+    }
+
+    /**
+     * Create a Karate-native hook object that invokes {@code request} before every
+     * HTTP call and {@code response} after every HTTP call (before the scenario
+     * reads {@code response}).
+     *
+     * <p>The return type is {@link Object} on purpose, to keep this interface free
+     * of Karate types. Callers register it through the binding's version-specific
+     * helper (for Karate 1.x, {@link KarateV1Binding#register}).
+     *
+     * @param request  the pre-request callback to wire in
+     * @param response the post-response callback to wire in, or {@code null} for none
+     * @return a Karate-native hook instance
+     */
+    Object createHook(PreRequestInterceptor request, PostResponseInterceptor response);
 }

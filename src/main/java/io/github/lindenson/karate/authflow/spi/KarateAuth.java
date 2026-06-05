@@ -49,7 +49,23 @@ public final class KarateAuth {
      * @return the supplied {@code builder}, now carrying the interceptor hook
      */
     public static <T extends Runner.Builder<T>> T register(T builder, PreRequestInterceptor interceptor) {
-        builder.hook((com.intuit.karate.RuntimeHook) BINDING.createHook(interceptor));
+        return register(builder, interceptor, null);
+    }
+
+    /**
+     * Register a pre-request interceptor and a post-response interceptor on a Karate
+     * runner builder, returning the builder for fluent chaining. Use this for
+     * strategies that also transform the response (e.g. decrypt an encrypted payload).
+     *
+     * @param builder  the Karate runner builder
+     * @param request  the pre-request interceptor (e.g. an {@code AuthStrategy})
+     * @param response the post-response interceptor, or {@code null} for none
+     * @param <T>      the concrete builder type
+     * @return the supplied {@code builder}, now carrying the interceptor hook
+     */
+    public static <T extends Runner.Builder<T>> T register(
+            T builder, PreRequestInterceptor request, PostResponseInterceptor response) {
+        builder.hook((com.intuit.karate.RuntimeHook) BINDING.createHook(request, response));
         return builder;
     }
 }
