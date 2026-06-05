@@ -1,5 +1,6 @@
 # karate-authflow
 
+[![CI](https://github.com/Lindenson/karate-authflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Lindenson/karate-authflow/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Karate](https://img.shields.io/badge/Karate-1.5.2-brightgreen.svg)](https://github.com/karatelabs/karate)
 [![Java](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://adoptium.net/)
