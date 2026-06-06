@@ -29,7 +29,7 @@
 ## 6. Tests
 
 - [x] 6.1 Integration (standard, hermetic): run the §12.1 feature through the strategy + `FakeTms`, assert `response.deviceSn`/`mttk`/`mtmk`, zero failures, keys in store
-- [ ] 6.2 Integration (ukrsib): prepend Step 0; assert handshake + full flow
+- [x] 6.2 Integration (ukrsib): prepend Step 0; assert handshake + full flow
 - [ ] 6.3 Per-scenario isolation under `parallel(n)`; out-of-order + out-of-scope failures
 - [ ] 6.4 Key store: capture, `requireOnboarded()`, `resetKeys()`
 
