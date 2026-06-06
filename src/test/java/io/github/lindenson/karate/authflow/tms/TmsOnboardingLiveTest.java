@@ -58,8 +58,9 @@ class TmsOnboardingLiveTest {
                 .build();
         TmsOnboardingStrategy strategy = new TmsOnboardingStrategy(config);
 
+        String feature = System.getProperty("tms.feature", FEATURE);
         Results results = KarateAuth
-                .register(Runner.path(FEATURE), strategy, strategy)
+                .register(Runner.path(feature), strategy, strategy)
                 .parallel(1);
 
         assertEquals(0, results.getFailCount(), results.getErrorMessages());
