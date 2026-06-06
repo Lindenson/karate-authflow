@@ -107,8 +107,18 @@ public final class TmsOnboardingStrategy implements PreRequestInterceptor, PostR
     }
 
     private void rememberFingerprint(AuthRequest request, TmsKeyStore store) {
-        JsonNode body = readTree(request.bodyAsString());
-        store.pkr(body.path("dfrgprt").asText(null)); // ukrsib: pkr == deviceFingerprint
+        ObjectNode body = (ObjectNode) readTree(request.bodyAsString());
+        String fingerprint = body.path("dfrgprt").asText(null); // plain
+        // ukrsib: the server stores the handshake key under refCode = the fingerprint,
+        // and looks it up at Step 1 via pkr. Keep pkr plain...
+        store.pkr(fingerprint);
+        // ...but InitialKeyRequest.dfrgprt is a byte[] field, so the wire value must be
+        // base64(UTF-8) of the fingerprint (the server does new String(base64-decode(...))).
+        if (fingerprint != null) {
+            body.put("dfrgprt", java.util.Base64.getEncoder()
+                    .encodeToString(fingerprint.getBytes(StandardCharsets.UTF_8)));
+            request.body(toBytes(body));
+        }
     }
 
     private void buildInit(AuthRequest request, TmsKeyStore store) {
@@ -185,7 +195,8 @@ public final class TmsOnboardingStrategy implements PreRequestInterceptor, PostR
         JsonNode envelope = readTree(response.bodyAsString());
         String ecd = envelope.path("ecd").asText(null);
         if (ecd == null) {
-            throw new OnboardingException("Encrypted response had no 'ecd' for step " + step);
+            throw new OnboardingException("Encrypted response had no 'ecd' for step " + step
+                    + " (HTTP " + response.status() + "): " + response.bodyAsString());
         }
         // mcc is absent on onboarding (RGK != STTK); nothing to verify.
         byte[] cleartext = TmsCryptoCodec.parseEcdField(ecd, store.rgk());
