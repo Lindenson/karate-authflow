@@ -16,6 +16,7 @@
 package io.github.lindenson.karate.authflow.tms;
 
 import java.util.Objects;
+import java.util.function.Supplier;
 
 /**
  * Immutable per-strategy configuration for {@link TmsOnboardingStrategy}.
@@ -35,6 +36,7 @@ public final class TmsOnboardingConfig {
     private final byte[] builtInTmsPublicKey;
     private final String builtInPkr;
     private final int rgkBits;
+    private final Supplier<String> otpSupplier;
 
     private TmsOnboardingConfig(Builder b) {
         this.flavor = Objects.requireNonNull(b.flavor, "flavor");
@@ -43,6 +45,7 @@ public final class TmsOnboardingConfig {
         this.builtInTmsPublicKey = b.builtInTmsPublicKey;
         this.builtInPkr = b.builtInPkr;
         this.rgkBits = b.rgkBits;
+        this.otpSupplier = b.otpSupplier;
         if (flavor == TmsFlavor.STANDARD && (builtInTmsPublicKey == null || builtInPkr == null)) {
             throw new IllegalArgumentException("standard flavor requires builtInTmsPublicKey and builtInPkr");
         }
@@ -76,6 +79,15 @@ public final class TmsOnboardingConfig {
         return rgkBits;
     }
 
+    /**
+     * @return an OTP supplier that the strategy calls at Step 3 to fill the {@code otp} field, or
+     *         {@code null} to use the value written by the feature. Use this for a server that
+     *         delivers a real OTP out-of-band (e.g. resolve it interactively from the device/DB).
+     */
+    public Supplier<String> otpSupplier() {
+        return otpSupplier;
+    }
+
     /** Fluent builder for {@link TmsOnboardingConfig}. */
     public static final class Builder {
         private TmsFlavor flavor = TmsFlavor.STANDARD;
@@ -84,6 +96,7 @@ public final class TmsOnboardingConfig {
         private byte[] builtInTmsPublicKey;
         private String builtInPkr;
         private int rgkBits = 128;
+        private Supplier<String> otpSupplier;
 
         public Builder flavor(TmsFlavor flavor) {
             this.flavor = flavor;
@@ -112,6 +125,18 @@ public final class TmsOnboardingConfig {
 
         public Builder rgkBits(int rgkBits) {
             this.rgkBits = rgkBits;
+            return this;
+        }
+
+        /** Resolve the Step 3 OTP dynamically (overrides whatever the feature wrote). */
+        public Builder otpSupplier(Supplier<String> otpSupplier) {
+            this.otpSupplier = otpSupplier;
+            return this;
+        }
+
+        /** Use a fixed Step 3 OTP (e.g. a server-side predictable OTP for a test account). */
+        public Builder otp(String constantOtp) {
+            this.otpSupplier = () -> constantOtp;
             return this;
         }
 

@@ -35,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  *   -Dtms.fp=authflow-demo-device \
  *   -Dtms.login=YOUR_LOGIN -Dtms.password=YOUR_PASSWORD \
  *   -Dtms.otp=STUB_OTP -Dtms.accessCode=9999 \
- *   [-Dtms.appVersion=100000007] [-Dtms.rgkBits=128]
+ *   [-Dtms.appVersion=100005000] [-Dtms.rgkBits=128]
  * </pre>
  */
 @DisplayName("TMS onboarding — live (ukrsib)")
@@ -53,7 +53,7 @@ class TmsOnboardingLiveTest {
 
         TmsOnboardingConfig config = TmsOnboardingConfig.builder()
                 .flavor(TmsFlavor.UKRSIB)
-                .appVersion(Integer.getInteger("tms.appVersion", 100_000_007))
+                .appVersion(Integer.getInteger("tms.appVersion", 100_005_000))
                 .rgkBits(Integer.getInteger("tms.rgkBits", 128))
                 .build();
         TmsOnboardingStrategy strategy = new TmsOnboardingStrategy(config);

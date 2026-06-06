@@ -152,6 +152,9 @@ public final class TmsOnboardingStrategy implements PreRequestInterceptor, PostR
     private void buildRegistration(AuthRequest request, TmsKeyStore store) {
         OnboardStep step = pending.get(request.scenarioId());
         ObjectNode cleartext = (ObjectNode) readTree(request.bodyAsString());
+        if (step == OnboardStep.OTP && config.otpSupplier() != null) {
+            cleartext.put("otp", config.otpSupplier().get()); // server-resolved OTP overrides the feature's
+        }
         encodeInnerFields(cleartext, step);
 
         ObjectNode envelope = baseEnvelope(store);
