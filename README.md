@@ -10,11 +10,11 @@ A transparent **authentication & pre-request interceptor layer** for the
 
 Test authors write ordinary Karate feature files. `karate-authflow` sits in front
 of every outgoing HTTP request and applies authentication for them — from a simple
-header to (soon) full request-body encryption — without changing how tests are written.
+header to full request-body encryption — without changing how tests are written.
 
-> **Status:** early development. HTTP **Basic** auth works today and is verified
-> against a live endpoint. Session and crypto strategies are next. APIs may change
-> before `1.0.0`.
+> **Status:** early development. HTTP **Basic**, **Ory Kratos session**, and
+> **encrypted device onboarding** work today and are verified against live
+> endpoints. APIs may change before `1.0.0`.
 
 ## Why
 
@@ -127,30 +127,30 @@ public final class ApiKeyStrategy implements AuthStrategy {
 Strategies should be stateless or thread-safe — one instance is shared across
 scenarios under `Runner.parallel(n)`.
 
-### Encrypted device onboarding (Transenix TMS)
+### Encrypted device onboarding (crypto backend)
 
-`TmsOnboardingStrategy` drives the Transenix `softpos-core` device-onboarding flow
-(4 steps `standard`, 5 steps `ukrsib`) from **cleartext** feature files. It owns
-the whole crypto envelope — RGK generation, RSA-wrapping the RGK under the TMS
-public key, AES-CBC of the payload, the request/response base64 layering, the
+`EncryptedOnboardingStrategy` drives an encrypted device-onboarding flow against a
+crypto backend (4 steps `STANDARD`, 5 steps `HANDSHAKE`) from **cleartext** feature
+files. It owns the whole crypto envelope — RGK generation, RSA-wrapping the RGK under
+the backend's public key, AES-CBC of the payload, the request/response base64 layering, the
 sticky `rid`/`dsn` bookkeeping — and decrypts each response so `match response.X`
 works on plaintext. After Step 4 the master keys `mTMK` / `mTTK` are captured into
-a per-scenario `TmsKeyStore` for follow-up (transaction) flows.
+a per-scenario `OnboardingKeyStore` for follow-up (transaction) flows.
 
 ```java
-TmsOnboardingConfig config = TmsOnboardingConfig.builder()
-        .flavor(TmsFlavor.UKRSIB)          // or STANDARD (+ builtInTmsPublicKey + builtInPkr)
+EncryptedOnboardingConfig config = EncryptedOnboardingConfig.builder()
+        .flavor(OnboardingFlavor.HANDSHAKE)          // or STANDARD (+ builtInServerKey + builtInPkr)
         .appVersion(100_005_000)           // must exist in the server's Version table
         .otp("123456")                     // optional: fix the Step 3 OTP (test accounts)
         .build();
-TmsOnboardingStrategy strategy = new TmsOnboardingStrategy(config);
+EncryptedOnboardingStrategy strategy = new EncryptedOnboardingStrategy(config);
 
 Results results = KarateAuth
         .register(Runner.path("classpath:onboarding.feature"), strategy, strategy) // pre + post
         .parallel(5);
 
 // follow-up flows read the captured keys per scenario:
-TmsKeyStore.Onboarded keys = strategy.keyStore(scenarioId).requireOnboarded();
+OnboardingKeyStore.Onboarded keys = strategy.keyStore(scenarioId).requireOnboarded();
 // keys.mtmk(), keys.mttk(), keys.deviceSn(), keys.rid()
 ```
 
@@ -169,8 +169,8 @@ parallel-safe. Out-of-scope URLs and out-of-order steps fail the scenario loudly
 A real OTP delivered out-of-band can be resolved via `otpSupplier(...)`; for test
 accounts use a server-side fixed OTP and pass it with `otp(...)`.
 
-> Verified end-to-end against a live `softpos-core` sandbox (both flavors), and
-> hermetically in CI against an in-process `FakeTms`.
+> Verified end-to-end against a live crypto-backend sandbox (both flavors), and
+> hermetically in CI against an in-process `FakeCryptoBackend`.
 
 ## Authentication scenarios
 
@@ -178,7 +178,7 @@ accounts use a server-side fixed OTP and pass it with `otp(...)`.
 |---|---|---|
 | **Basic** | Inject an `Authorization: Basic` header on every request | ✅ available |
 | **Session (Ory Kratos)** | Log in once via the Kratos browser flow, reuse the `ory_kratos_session` cookie on every request | ✅ available |
-| **Crypto onboarding (Transenix TMS)** 🔑 | Drive the encrypted device-onboarding flow (RGK envelope, RSA/AES, master-key capture) from cleartext features | ✅ available |
+| **Crypto onboarding (crypto backend)** 🔑 | Drive the encrypted device-onboarding flow (RGK envelope, RSA/AES, master-key capture) from cleartext features | ✅ available |
 | **Bearer / token** | Inject a bearer token | planned |
 | **Session refresh** | Re-login automatically on `401` | planned |
 | **Crypto (generic)** | Pluggable session-key derivation + selective JSON-field encryption / body signing | planned |

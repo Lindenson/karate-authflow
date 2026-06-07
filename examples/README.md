@@ -1,13 +1,14 @@
 # karate-authflow examples
 
-Two runnable, self-contained Karate examples showing transparent auth with
+Three runnable, self-contained Karate examples showing transparent auth with
 `karate-authflow`. The feature files contain **no authentication steps** — the
-plugin injects credentials for them.
+plugin injects credentials (or full crypto) for them.
 
 | Example | Strategy | Backing service | Needs |
 |---|---|---|---|
 | [`BasicAuthExample`](src/test/java/io/github/lindenson/karate/authflow/examples/BasicAuthExample.java) | `BasicAuthStrategy` | `postman-echo.com/basic-auth` | internet |
 | [`KratosSessionExample`](src/test/java/io/github/lindenson/karate/authflow/examples/KratosSessionExample.java) | `KratosSessionStrategy` | real Ory Kratos via Docker | Docker |
+| [`OnboardingExample`](src/test/java/io/github/lindenson/karate/authflow/examples/OnboardingExample.java) | `EncryptedOnboardingStrategy` | in-process `FakeCryptoBackend` | nothing |
 
 ## Prerequisites
 
@@ -67,6 +68,21 @@ Tear down when done:
 ```bash
 docker compose down
 ```
+
+## 3. Encrypted device onboarding (no setup)
+
+```bash
+cd examples
+mvn -q test -Dtest=OnboardingExample
+```
+
+Fully self-contained — an in-process `FakeCryptoBackend` stands in for the real
+crypto backend (no network, no Docker). `EncryptedOnboardingStrategy` performs the
+whole encrypted onboarding (RGK generation, RSA-wrapping, AES-CBC, the base64
+matryoshka, sticky `rid`/`dsn`) and decrypts every response, so the feature stays
+cleartext and ends by capturing the master keys. To point the same flow at a real
+backend, drop the `FakeCryptoBackend` and configure the strategy's base URL +
+credentials (see the project README).
 
 ## Run everything
 
