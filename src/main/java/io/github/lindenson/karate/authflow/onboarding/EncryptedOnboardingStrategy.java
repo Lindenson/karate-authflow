@@ -224,6 +224,12 @@ public final class EncryptedOnboardingStrategy implements PreRequestInterceptor,
         return step;
     }
 
+    /** @return true if {@code (method, path)} is one of the onboarding endpoints (used by a composite flow). */
+    public boolean handles(String method, String path) {
+        return method != null && path != null
+                && ROUTES.containsKey(new RequestKey(method.toUpperCase(), path));
+    }
+
     private void checkOrder(OnboardStep step, OnboardingKeyStore store) {
         List<OnboardStep> sequence = config.flavor() == OnboardingFlavor.HANDSHAKE ? HANDSHAKE_SEQUENCE : STANDARD_SEQUENCE;
         int index = sequence.indexOf(step);
