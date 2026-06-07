@@ -1,6 +1,6 @@
 ## Context
 
-Verified against `softpos-core` + decompiled `SoftHsmCryptoService` (LMK values are fixed constants, so all `*UnderLmk` wrapping is reproducible). The onboarding strategy already captures, per scenario, the RGK and the Step-4 `mTTK`/`mTMK` (delivered hex-encoded, wrapped under the RGK) and `deviceSn` in `OnboardingKeyStore`.
+Verified against the backend + a decompiled reference crypto implementation (LMK values are fixed constants, so all `*UnderLmk` wrapping is reproducible). The onboarding strategy already captures, per scenario, the RGK and the Step-4 `mTTK`/`mTMK` (delivered hex-encoded, wrapped under the RGK) and `deviceSn` in `OnboardingKeyStore`.
 
 ### STTK wire facts (code-grounded)
 
@@ -20,7 +20,7 @@ Verified against `softpos-core` + decompiled `SoftHsmCryptoService` (LMK values 
 
 ## Decisions
 
-- **Pure-JCE, no vendor runtime dep.** The LMK constants + algorithms are reimplemented in the codec; `transenix-crypto` is used **only in test scope** as a parity oracle (`assert ours == SoftHsmCryptoService.deriveSttk/deriveStmk/calculate128bitHmacSha256WithStmk`). Keeps the public artifact clean and publishable. *Alternative:* depend on the vendor jar at runtime — rejected (private, unpublishable).
+- **Pure-JCE, no vendor runtime dep.** The LMK constants + algorithms are reimplemented in the codec; the reference crypto library is used **only in test scope** as a parity oracle (`assert ours == reference STTK/STMK/MAC`). Keeps the public artifact clean and publishable. *Alternative:* depend on the reference jar at runtime — rejected (private, unpublishable).
 - **Reuse `OnboardingKeyStore` as the bridge.** `SttkSessionStrategy` reads `requireOnboarded()` (mTTK/mTMK/RGK/deviceSn) for the scenario. The master-key unwrap (under RGK) → `mttkRaw`/`mtmkRaw` is done once and cached per scenario; STTK/STMK are derived **per request** from that request's `rid`.
 - **Per-request session keys, stashed for the response.** `intercept(AuthRequest)` generates `rid`, derives STTK/STMK, encrypts, MACs, and stashes `{STTK, STMK}` keyed by `scenarioId` so `intercept(AuthResponse)` can verify `mcc` and decrypt `ecd`. (Sequential within a scenario.)
 - **Composite registration for onboard-then-transact.** A small dispatcher routes onboarding endpoints to `EncryptedOnboardingStrategy` and STTK endpoints to `SttkSessionStrategy`, both sharing the same per-scenario `OnboardingKeyStore`, so one feature can do the full journey. STTK-only usage (keys supplied directly) is also supported via a constructor.
@@ -28,7 +28,7 @@ Verified against `softpos-core` + decompiled `SoftHsmCryptoService` (LMK values 
 
 ## Risks / Trade-offs
 
-- **Parity with the soft HSM** is the #1 risk → the test-scope oracle asserts exact byte equality of STTK/STMK/MAC against `SoftHsmCryptoService`, and a live `devices/language` run confirms against the real server.
+- **Parity with the soft HSM** is the #1 risk → the test-scope oracle asserts exact byte equality of STTK/STMK/MAC against the reference crypto implementation, and a live `devices/language` run confirms against the real server.
 - **AES-256 (STTK is 32 bytes)** requires the JDK unlimited crypto policy — default since JDK 9, fine on 17+.
 - **`mttkRaw` form assumption** (wrapped under RGK) is code-verified; the live run is the final proof, with the same `-Dbackend.*` knobs to adjust if needed.
 - **Master-key unwrap needs the onboarding RGK** retained in `OnboardingKeyStore` — already kept.

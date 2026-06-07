@@ -2,7 +2,7 @@
 
 Onboarding ends with the master keys (`mTMK`/`mTTK`) captured in `OnboardingKeyStore`. The *working* flows (transactions, device settings, etc.) run under a **session key (STTK)** derived from those master keys, with a per-request **MAC (STMK)**. This change adds that session layer so a tester can, in one cleartext feature, onboard a device and then drive an STTK-protected endpoint (first target: `POST /api/v1/devices/language`) — with the plugin handling session-key derivation, encryption, and MAC transparently in both directions.
 
-Reverse-engineered from the backend's `SoftHsmCryptoService`: the LMK wrapping is fixed constants, so the whole STTK layer is **pure JCE** — no private vendor dependency at runtime.
+Reverse-engineered from the backend's reference crypto implementation: the LMK wrapping is fixed constants, so the whole STTK layer is **pure JCE** — no private vendor dependency at runtime.
 
 ## What Changes
 
@@ -10,7 +10,7 @@ Reverse-engineered from the backend's `SoftHsmCryptoService`: the LMK wrapping i
 - Add `SttkSessionStrategy` (`PreRequestInterceptor` + `PostResponseInterceptor`): builds the `FullGeneralRequest` envelope (`rid,v,dsn,ed,mccd`), encrypts `ed` under a per-`rid` STTK, computes the request MAC `mccd`, decrypts the response `ecd`, and verifies the response MAC `mcc`. Consumes the onboarding result (`mTTK`/`mTMK`/RGK/`deviceSn`) from `OnboardingKeyStore`.
 - Add a composite registration so a single feature can onboard (handshake/standard) **and** then call STTK endpoints, sharing per-scenario state.
 - Extend `FakeCryptoBackend` with `POST /api/v1/devices/language` (server-side STTK decrypt + MAC verify + encrypted empty response).
-- A test-scope parity check against the real `transenix-crypto` jar (`SoftHsmCryptoService`) proving our pure-JCE STTK/STMK/MAC match byte-for-byte; a hermetic integration test (onboard → language); and a live runner for the real backend.
+- A test-scope parity check against a private reference crypto library proving our pure-JCE STTK/STMK/MAC match byte-for-byte; a hermetic integration test (onboard → language); and a live runner for the real backend.
 
 ## Capabilities
 
@@ -23,5 +23,5 @@ Reverse-engineered from the backend's `SoftHsmCryptoService`: the LMK wrapping i
 ## Impact
 
 - **New code**: STTK methods in the crypto codec; `SttkSessionStrategy` + a composite/dispatch entry; `FakeCryptoBackend` language endpoint; tests + a `devices-language` feature + live runner.
-- **Dependencies**: none new at runtime (pure JCE); `transenix-crypto:3.6.1` added in **test scope only** as the parity oracle.
+- **Dependencies**: none new at runtime (pure JCE); the reference crypto library added in **test scope only** as the parity oracle.
 - **Non-goals**: PIN/SPTK/DUKPT flows, transaction (ISO8583) endpoints beyond `devices/language`, automatic session rotation policy.

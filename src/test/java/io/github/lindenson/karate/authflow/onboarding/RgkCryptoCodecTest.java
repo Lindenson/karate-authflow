@@ -40,7 +40,7 @@ class RgkCryptoCodecTest {
 
     private static final byte[] ZERO_IV = new byte[16];
 
-    /** Server-side: AES/CBC/PKCS5 decrypt with IV=0, mirroring SoftHsmCryptoService. */
+    /** Server-side: AES/CBC/PKCS5 decrypt with IV=0, mirroring the reference crypto backend. */
     private static byte[] serverAesDecrypt(byte[] ciphertext, byte[] rgk) throws Exception {
         Cipher c = Cipher.getInstance("AES/CBC/PKCS5Padding");
         c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(rgk, "AES"), new IvParameterSpec(ZERO_IV));

@@ -1,7 +1,7 @@
 ## 1. Crypto codec — STTK primitives (riskiest first)
 
 - [ ] 1.1 Add to `RgkCryptoCodec` (or a sibling `SttkCryptoCodec`): `unwrapMasterKeyUnderRgk(hexKey, rgk)`, `sessionIdFromRid(rid)`, `deriveSttk(mttkRaw, sessionId)`, `deriveStmk(mtmkRaw, sessionId)` (HmacSHA256), `encryptUnderSttk`/`decryptUnderSttk` (AES/CBC/PKCS5, zero IV), `mac128(stmk, data)` (HmacSHA256→16 bytes, base64)
-- [ ] 1.2 Add `transenix-crypto:3.6.1` in **test scope**; parity test asserting our STTK/STMK/MAC == `SoftHsmCryptoService.deriveSttk/deriveStmk/calculate128bitHmacSha256WithStmk` (account for the LMK wrap on the reference side)
+- [ ] 1.2 Add the reference crypto library in **test scope**; parity test asserting our STTK/STMK/MAC == the reference implementation’s session-key derivation + MAC (account for the LMK wrap on the reference side)
 
 ## 2. Session strategy
 
