@@ -127,111 +127,19 @@ public final class ApiKeyStrategy implements AuthStrategy {
 Strategies should be stateless or thread-safe — one instance is shared across
 scenarios under `Runner.parallel(n)`.
 
-### Encrypted device onboarding (crypto backend)
+### Encrypted onboarding & session crypto (STTK)
 
-`EncryptedOnboardingStrategy` drives an encrypted device-onboarding flow against a
-crypto backend (4 steps `STANDARD`, 5 steps `HANDSHAKE`) from **cleartext** feature
-files. It owns the whole crypto envelope — RGK generation, RSA-wrapping the RGK under
-the backend's public key, AES-CBC of the payload, the request/response base64 layering, the
-sticky `rid`/`dsn` bookkeeping — and decrypts each response so `match response.X`
-works on plaintext. After Step 4 the master keys `mTMK` / `mTTK` are captured into
-a per-scenario `OnboardingKeyStore` for follow-up (transaction) flows.
+The crown of the project: drive an **encrypted device-onboarding** handshake (RGK
+envelope — RSA + AES, base64 layering) and the follow-up **per-request session
+layer** (STTK/STMK key derivation, AES body encryption + MAC, response
+decrypt/verify) from **cleartext** features. One composite `OnboardingSessionFlow`
+covers the whole journey — onboard a device, then call working endpoints like
+`POST /api/v1/devices/language` — with all crypto handled transparently in both
+directions.
 
-```java
-EncryptedOnboardingConfig config = EncryptedOnboardingConfig.builder()
-        .flavor(OnboardingFlavor.HANDSHAKE)          // or STANDARD (+ builtInServerKey + builtInPkr)
-        .appVersion(100_005_000)           // must exist in the server's Version table
-        .otp("123456")                     // optional: fix the Step 3 OTP (test accounts)
-        .build();
-EncryptedOnboardingStrategy strategy = new EncryptedOnboardingStrategy(config);
-
-Results results = KarateAuth
-        .register(Runner.path("classpath:onboarding.feature"), strategy, strategy) // pre + post
-        .parallel(5);
-
-// follow-up flows read the captured keys per scenario:
-OnboardingKeyStore.Onboarded keys = strategy.keyStore(scenarioId).requireOnboarded();
-// keys.mtmk(), keys.mttk(), keys.deviceSn(), keys.rid()
-```
-
-The feature stays pure (no crypto, no base64):
-
-```gherkin
-Given path '/api/v1/init'
-And request { dad: { dn: 'Pixel 7', ... }, dfrgprt: 'fp-1', fbrid: 'token', lag: 'en-US' }
-When method post
-Then status 200
-And match response.deviceSn == '#string'
-```
-
-State is isolated per scenario (`scenarioId()`), so a single strategy instance is
-parallel-safe. Out-of-scope URLs and out-of-order steps fail the scenario loudly.
-A real OTP delivered out-of-band can be resolved via `otpSupplier(...)`; for test
-accounts use a server-side fixed OTP and pass it with `otp(...)`.
-
-> Verified end-to-end against a live crypto-backend sandbox (both flavors), and
-> hermetically in CI against an in-process `FakeCryptoBackend`.
-
-### Session crypto (STTK) — working-flow endpoints
-
-Onboarding is only the door. Once a device is onboarded, every *working* request
-(change language, fetch config, post a transaction, …) is protected by a
-**per-request session layer** the plugin derives and applies transparently. The
-running example endpoint is `POST /api/v1/devices/language` with a cleartext body
-`{ language: 'en' }`.
-
-`OnboardingSessionFlow` is a single composite strategy that routes by URL:
-onboarding endpoints go through `EncryptedOnboardingStrategy` (RGK), everything
-else through `SttkSessionStrategy` (the session layer) — both sharing the same
-per-scenario `OnboardingKeyStore`. You register it once and write a plain feature
-that onboards and then calls the working endpoint; the crypto is invisible.
-
-```java
-EncryptedOnboardingConfig config = EncryptedOnboardingConfig.builder()
-        .flavor(OnboardingFlavor.HANDSHAKE)
-        .appVersion(100_005_000)
-        .build();
-OnboardingSessionFlow flow = new OnboardingSessionFlow(config);   // onboard + session in one
-
-Results results = KarateAuth
-        .register(Runner.path("classpath:journey.feature"), flow, flow)
-        .parallel(5);
-```
-
-```gherkin
-# journey.feature — 100% cleartext, no crypto, no base64, no key handling
-Given path '/api/v1/init/initial_handshake_key'   # ... onboarding steps ...
-...
-# working flow — transparently wrapped in the session envelope both ways:
-Given path '/api/v1/devices/language'
-And request { language: 'en' }
-When method post
-Then status 200
-```
-
-**What the session layer does per request** (all pure JCE, no native/vendor code):
-
-1. Derives a fresh session key pair from the onboarding master keys and a
-   per-request id: `sessionId = hex(rid)`, `STTK = HMAC-SHA256(masterTransportKey, sessionId)`,
-   `STMK = HMAC-SHA256(masterMacKey, sessionId)`.
-2. Encrypts the cleartext body under `STTK` (AES/CBC) → the `ed` field.
-3. Computes a message authentication code `mccd = base64(HMAC-SHA256(STMK, ed)[0..15])`.
-4. Builds the request envelope `{ rid, v, dsn, ed, mccd }`.
-5. On the response, verifies the server MAC (`mcc`) with `STMK` and decrypts the
-   `ecd` field with `STTK`, so `match response.X` sees plaintext.
-
-Two operating modes, selected at registration:
-
-| Mode | How to enable | Wire shape | When to use |
-|---|---|---|---|
-| **Full encryption** | `new OnboardingSessionFlow(config, false)` | `ed` = AES ciphertext, `mccd` = real STTK/STMK MAC, response MAC verified | production-equivalent crypto |
-| **Skip-encryption** (test build) | `new OnboardingSessionFlow(config)` (default) | `ed` = base64(plaintext), MAC skipped server-side | backends running in a test build that bypasses session crypto |
-
-> Both modes are proven end-to-end against a live backend (full-encryption
-> `devices/language` returns a decrypted live response and the request/response
-> MACs match), and hermetically against the in-process `FakeCryptoBackend`. The
-> session crypto is reproduced in plain JCE and validated byte-for-byte against a
-> reference implementation.
+📖 **Full algorithms, wire format, configuration and the two operating modes are
+documented in [onboarding.md](onboarding.md).** A runnable, zero-setup demo of the
+entire journey is in [`examples/`](examples) (`OnboardingExample`).
 
 ## Authentication scenarios
 

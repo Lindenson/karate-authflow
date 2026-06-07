@@ -19,6 +19,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.github.lindenson.karate.authflow.onboarding.crypto.RgkCryptoCodec;
+import io.github.lindenson.karate.authflow.onboarding.crypto.SttkCryptoCodec;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
@@ -28,30 +30,43 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Self-contained in-process crypto backend for the onboarding example: it owns an RSA key pair,
- * unwraps the RGK, decrypts the request payload, and encrypts the response — the inverse of what
- * {@code EncryptedOnboardingStrategy} does — so the example runs end-to-end with no real backend,
- * no network and no Docker.
+ * Self-contained in-process crypto backend for the onboarding example. It mirrors the real server
+ * for both layers, so the example runs end-to-end with no real backend, no network and no Docker:
+ *
+ * <ul>
+ *   <li><b>Onboarding (RGK):</b> owns an RSA key pair, unwraps the RGK, decrypts each request
+ *       payload and encrypts each response — the inverse of {@code EncryptedOnboardingStrategy}.
+ *       At access-code it issues the master keys ({@code mTTK}/{@code mTMK}) <b>wrapped under the
+ *       RGK and hex-encoded</b>, exactly as the device expects.</li>
+ *   <li><b>Session (STTK):</b> serves {@code POST /api/v1/devices/language} — re-derives the same
+ *       per-request {@code STTK}/{@code STMK} from the issued master keys and the request {@code rid},
+ *       verifies the request MAC ({@code mccd}), decrypts {@code ed}, then returns an encrypted,
+ *       MAC'd response ({@code ecd}/{@code mcc}) — the inverse of {@code SttkSessionStrategy}.</li>
+ * </ul>
  */
 final class FakeCryptoBackend implements AutoCloseable {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final byte[] ZERO_IV = new byte[16];
+    private static final SecureRandom RNG = new SecureRandom();
 
     /** deviceSn token as the wire carries it: base64 of the SN bytes. */
     static final String DEVICE_SN_TOKEN = Base64.getEncoder().encodeToString("DEMO-DEVICE-1".getBytes(StandardCharsets.UTF_8));
-    static final String MTMK = "demo-master-mac-key";
-    static final String MTTK = "demo-master-traffic-key";
 
     private final HttpServer server;
     private final String baseUrl;
     private final KeyPair backend;
     private final Map<String, byte[]> rgkByRid = new ConcurrentHashMap<>();
+
+    /** Raw master keys issued at access-code; reused to derive the session keys for working flows. */
+    private volatile byte[] masterTtkRaw;
+    private volatile byte[] masterTmkRaw;
 
     FakeCryptoBackend() throws Exception {
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
@@ -62,6 +77,7 @@ final class FakeCryptoBackend implements AutoCloseable {
         server.createContext("/api/v1/init/credentials", this::emptyOk);
         server.createContext("/api/v1/init/otp/confirm-otp", this::emptyOk);
         server.createContext("/api/v1/init/access-code/register", this::accessCode);
+        server.createContext("/api/v1/devices/language", this::language);
         server.createContext("/api/v1/init", this::init);
         server.setExecutor(null);
         server.start();
@@ -75,6 +91,8 @@ final class FakeCryptoBackend implements AutoCloseable {
     byte[] serverPublicKeyX509() {
         return backend.getPublic().getEncoded();
     }
+
+    // ------------------------------------------------------------------ onboarding (RGK)
 
     private void init(HttpExchange ex) throws IOException {
         try {
@@ -93,8 +111,25 @@ final class FakeCryptoBackend implements AutoCloseable {
         registrationStep(ex, "{}");
     }
 
+    /** Step 4: issue the master keys wrapped under the RGK (hex), as the real backend does. */
     private void accessCode(HttpExchange ex) throws IOException {
-        registrationStep(ex, "{\"mttk\":\"" + MTTK + "\",\"mtmk\":\"" + MTMK + "\"}");
+        try {
+            JsonNode env = MAPPER.readTree(readBody(ex));
+            String rid = dtoString(env.path("rid").asText());
+            byte[] rgk = rgkByRid.get(rid);
+            if (rgk == null) {
+                respond(ex, 400, "{\"error\":\"unknown rid\"}");
+                return;
+            }
+            decryptEd(env, rgk);
+            masterTtkRaw = randomKey();
+            masterTmkRaw = randomKey();
+            String payload = "{\"mttk\":\"" + hex(wrapUnderRgk(masterTtkRaw, rgk)) + "\","
+                    + "\"mtmk\":\"" + hex(wrapUnderRgk(masterTmkRaw, rgk)) + "\"}";
+            respondEnvelope(ex, rid, encryptEcd(payload, rgk));
+        } catch (Exception e) {
+            respond(ex, 500, "{\"error\":\"" + e.getMessage() + "\"}");
+        }
     }
 
     private void registrationStep(HttpExchange ex, String payload) throws IOException {
@@ -111,6 +146,41 @@ final class FakeCryptoBackend implements AutoCloseable {
             respond(ex, 500, "{\"error\":\"" + e.getMessage() + "\"}");
         }
     }
+
+    // ------------------------------------------------------------------ session (STTK)
+
+    /**
+     * {@code POST /api/v1/devices/language} under the per-request session key. Re-derives
+     * {@code STTK}/{@code STMK} from the issued master keys and {@code rid}, verifies the request
+     * MAC, decrypts the body, and returns an encrypted + MAC'd response.
+     */
+    private void language(HttpExchange ex) throws IOException {
+        try {
+            JsonNode env = MAPPER.readTree(readBody(ex));
+            String rid = dtoString(env.path("rid").asText());
+            byte[] sessionId = SttkCryptoCodec.sessionId(rid);
+            byte[] sttk = SttkCryptoCodec.deriveSttk(masterTtkRaw, sessionId);
+            byte[] stmk = SttkCryptoCodec.deriveStmk(masterTmkRaw, sessionId);
+
+            byte[] ciphertext = innerBinary(env.path("ed").asText());
+            String mccd = dtoString(env.path("mccd").asText());
+            if (!SttkCryptoCodec.mac(stmk, ciphertext).equals(mccd)) {
+                respond(ex, 500, "{\"errorCode\":\"3307\",\"errorText\":\"Cryptography error\"}");
+                return;
+            }
+            // request body (e.g. {"language":"en"}) decrypts cleanly — accepted.
+            RgkCryptoCodec.decryptUnderRgk(ciphertext, sttk);
+
+            byte[] respCipher = RgkCryptoCodec.encryptUnderRgk("{}".getBytes(StandardCharsets.UTF_8), sttk);
+            String ecd = Base64.getEncoder().encodeToString(respCipher);
+            String mcc = SttkCryptoCodec.mac(stmk, respCipher);
+            respond(ex, 200, "{\"reid\":\"" + rid + "\",\"ecd\":\"" + ecd + "\",\"mcc\":\"" + mcc + "\"}");
+        } catch (Exception e) {
+            respond(ex, 500, "{\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    // ------------------------------------------------------------------ crypto helpers
 
     private static String dtoString(String wireValue) {
         return new String(Base64.getDecoder().decode(wireValue), StandardCharsets.UTF_8);
@@ -138,6 +208,27 @@ final class FakeCryptoBackend implements AutoCloseable {
         Cipher c = Cipher.getInstance("AES/CBC/PKCS5Padding");
         c.init(mode, new SecretKeySpec(rgk, "AES"), new IvParameterSpec(ZERO_IV));
         return c.doFinal(data);
+    }
+
+    /** Wrap a raw master key under the RGK ({@code AES/ECB/NoPadding}) — the delivery form. */
+    private static byte[] wrapUnderRgk(byte[] masterRaw, byte[] rgk) throws Exception {
+        Cipher c = Cipher.getInstance("AES/ECB/NoPadding");
+        c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(rgk, "AES"));
+        return c.doFinal(masterRaw);
+    }
+
+    private static byte[] randomKey() {
+        byte[] k = new byte[32]; // 32 bytes → AES-256 session key
+        RNG.nextBytes(k);
+        return k;
+    }
+
+    private static String hex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
     }
 
     private void respondEnvelope(HttpExchange ex, String reid, String ecd) throws IOException {

@@ -1,13 +1,15 @@
 @onboarding
-Feature: encrypted device onboarding via karate-authflow
+Feature: encrypted device onboarding + STTK working flow via karate-authflow
 
-  # No crypto, base64, rid, rgke or dsn here — EncryptedOnboardingStrategy owns all of
-  # that. The scenario reads decrypted (cleartext) responses.
+  # No crypto, base64, rid, rgke, dsn, session-key derivation or MAC here — the plugin
+  # owns all of it. The scenario reads decrypted (cleartext) responses end to end:
+  # onboarding runs under the RGK envelope, the final language call under the per-request
+  # STTK session key with an STMK MAC.
 
   Background:
     * url karate.properties['backend.base']
 
-  Scenario: a device onboards and receives master keys
+  Scenario: a device onboards, receives master keys, then changes its language under STTK
 
     # Step 1 — init (RGK exchange + device info)
     Given path '/api/v1/init'
@@ -44,3 +46,11 @@ Feature: encrypted device onboarding via karate-authflow
     Then status 200
     And match response.mttk == '#string'
     And match response.mtmk == '#string'
+
+    # Step 5 — working flow under the per-request STTK session key (change device language).
+    # The plugin derives STTK/STMK from the master keys + rid, encrypts the body, MACs it,
+    # then verifies and decrypts the response — all transparent.
+    Given path '/api/v1/devices/language'
+    And request { language: 'en' }
+    When method post
+    Then status 200
