@@ -84,6 +84,11 @@ cleartext and ends by capturing the master keys. To point the same flow at a rea
 backend, drop the `FakeCryptoBackend` and configure the strategy's base URL +
 credentials (see the project README).
 
+> 📖 **[ONBOARDING.md](ONBOARDING.md)** — full step-by-step walkthrough: the exact
+> JSON on the wire at each step, the classes/methods involved, the base64 envelope,
+> and where `mTMK` / `mTTK` are stored for follow-up flows. This flow is non-standard
+> (stateful, encrypted both ways), so read this to understand it end to end.
+
 ## Run everything
 
 With internet and Kratos up:
