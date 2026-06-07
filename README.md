@@ -127,15 +127,61 @@ public final class ApiKeyStrategy implements AuthStrategy {
 Strategies should be stateless or thread-safe — one instance is shared across
 scenarios under `Runner.parallel(n)`.
 
+### Encrypted device onboarding (Transenix TMS)
+
+`TmsOnboardingStrategy` drives the Transenix `softpos-core` device-onboarding flow
+(4 steps `standard`, 5 steps `ukrsib`) from **cleartext** feature files. It owns
+the whole crypto envelope — RGK generation, RSA-wrapping the RGK under the TMS
+public key, AES-CBC of the payload, the request/response base64 layering, the
+sticky `rid`/`dsn` bookkeeping — and decrypts each response so `match response.X`
+works on plaintext. After Step 4 the master keys `mTMK` / `mTTK` are captured into
+a per-scenario `TmsKeyStore` for follow-up (transaction) flows.
+
+```java
+TmsOnboardingConfig config = TmsOnboardingConfig.builder()
+        .flavor(TmsFlavor.UKRSIB)          // or STANDARD (+ builtInTmsPublicKey + builtInPkr)
+        .appVersion(100_005_000)           // must exist in the server's Version table
+        .otp("123456")                     // optional: fix the Step 3 OTP (test accounts)
+        .build();
+TmsOnboardingStrategy strategy = new TmsOnboardingStrategy(config);
+
+Results results = KarateAuth
+        .register(Runner.path("classpath:onboarding.feature"), strategy, strategy) // pre + post
+        .parallel(5);
+
+// follow-up flows read the captured keys per scenario:
+TmsKeyStore.Onboarded keys = strategy.keyStore(scenarioId).requireOnboarded();
+// keys.mtmk(), keys.mttk(), keys.deviceSn(), keys.rid()
+```
+
+The feature stays pure (no crypto, no base64):
+
+```gherkin
+Given path '/api/v1/init'
+And request { dad: { dn: 'Pixel 7', ... }, dfrgprt: 'fp-1', fbrid: 'token', lag: 'en-US' }
+When method post
+Then status 200
+And match response.deviceSn == '#string'
+```
+
+State is isolated per scenario (`scenarioId()`), so a single strategy instance is
+parallel-safe. Out-of-scope URLs and out-of-order steps fail the scenario loudly.
+A real OTP delivered out-of-band can be resolved via `otpSupplier(...)`; for test
+accounts use a server-side fixed OTP and pass it with `otp(...)`.
+
+> Verified end-to-end against a live `softpos-core` sandbox (both flavors), and
+> hermetically in CI against an in-process `FakeTms`.
+
 ## Authentication scenarios
 
 | Scenario | What it does | Status |
 |---|---|---|
 | **Basic** | Inject an `Authorization: Basic` header on every request | ✅ available |
 | **Session (Ory Kratos)** | Log in once via the Kratos browser flow, reuse the `ory_kratos_session` cookie on every request | ✅ available |
+| **Crypto onboarding (Transenix TMS)** 🔑 | Drive the encrypted device-onboarding flow (RGK envelope, RSA/AES, master-key capture) from cleartext features | ✅ available |
 | **Bearer / token** | Inject a bearer token | planned |
 | **Session refresh** | Re-login automatically on `401` | planned |
-| **Crypto** 🔑 | Derive a session key and selectively encrypt JSON fields / sign the body before send | planned |
+| **Crypto (generic)** | Pluggable session-key derivation + selective JSON-field encryption / body signing | planned |
 
 The crypto layer is the project's reason to exist — Karate has no native support
 for request-body encryption or custom key derivation.

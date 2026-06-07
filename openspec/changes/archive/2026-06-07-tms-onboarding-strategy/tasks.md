@@ -24,17 +24,17 @@
 ## 5. FakeTms harness (server-side oracle)
 
 - [x] 5.1 Add `FakeTms` (JDK `HttpServer`): own RSA key pair (public = ihshky/built-in); Step 0 returns `{ihshky}`; Step 1 unwrap `rgke` → RGK, decrypt `ed`, return encrypted `{deviceSn}`; Steps 2/3 validate login/password/OTP → encrypted `{}`; Step 4 validate access code → encrypted `{mttk,mtmk}`
-- [ ] 5.2 Decode/encode in `FakeTms` written the server way (independent of the strategy), plus one hand-computed fixture assertion
+- [x] 5.2 Decode/encode in `FakeTms` written the server way (independent of the strategy), plus one hand-computed fixture assertion
 
 ## 6. Tests
 
 - [x] 6.1 Integration (standard, hermetic): run the §12.1 feature through the strategy + `FakeTms`, assert `response.deviceSn`/`mttk`/`mtmk`, zero failures, keys in store
 - [x] 6.2 Integration (ukrsib): prepend Step 0; assert handshake + full flow
-- [ ] 6.3 Per-scenario isolation under `parallel(n)`; out-of-order + out-of-scope failures
-- [ ] 6.4 Key store: capture, `requireOnboarded()`, `resetKeys()`
+- [x] 6.3 Per-scenario isolation under `parallel(n)`; out-of-order + out-of-scope failures
+- [x] 6.4 Key store: capture, `requireOnboarded()`, `resetKeys()`
 
 ## 7. Docs & verification
 
-- [ ] 7.1 README section: configure flavor + credentials, plug an OTP supplier, reach `TmsKeyStore` for `mTMK`/`mTTK`
-- [ ] 7.2 `RAISED_QUESTIONS.md` (or doc section) capturing the §5.6 `dsn` wording and any other mismatch
-- [ ] 7.3 `mvn verify` green; import isolation; `openspec validate tms-onboarding-strategy`
+- [x] 7.1 README section: configure flavor + credentials, plug an OTP supplier, reach `TmsKeyStore` for `mTMK`/`mTTK`
+- [x] 7.2 `RAISED_QUESTIONS.md` (or doc section) capturing the §5.6 `dsn` wording and any other mismatch
+- [x] 7.3 `mvn verify` green; import isolation; `openspec validate tms-onboarding-strategy`
