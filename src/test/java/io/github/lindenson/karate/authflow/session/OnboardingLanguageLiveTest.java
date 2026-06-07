@@ -54,7 +54,8 @@ class OnboardingLanguageLiveTest {
                 .flavor(OnboardingFlavor.HANDSHAKE)
                 .appVersion(Integer.getInteger("backend.appVersion", 100_005_000))
                 .build();
-        OnboardingSessionFlow flow = new OnboardingSessionFlow(config);
+        boolean skipEncryption = !Boolean.getBoolean("backend.encrypt");
+        OnboardingSessionFlow flow = new OnboardingSessionFlow(config, skipEncryption);
 
         Results results = KarateAuth
                 .register(Runner.path(FEATURE), flow, flow)

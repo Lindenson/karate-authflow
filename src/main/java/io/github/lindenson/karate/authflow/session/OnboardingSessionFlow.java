@@ -44,9 +44,18 @@ public final class OnboardingSessionFlow implements PreRequestInterceptor, PostR
     private final ConcurrentHashMap<String, Boolean> onboardingHandledLast = new ConcurrentHashMap<>();
 
     public OnboardingSessionFlow(EncryptedOnboardingConfig config) {
+        this(config, true);
+    }
+
+    /**
+     * @param config         onboarding configuration
+     * @param skipEncryption {@code true} drives working-flow endpoints with {@code se=true}
+     *                       (the TEST-build path, no AES/MAC); {@code false} uses full STTK
+     */
+    public OnboardingSessionFlow(EncryptedOnboardingConfig config, boolean skipEncryption) {
         Objects.requireNonNull(config, "config");
         this.onboarding = new EncryptedOnboardingStrategy(config);
-        this.session = new SttkSessionStrategy(onboarding::keyStore, config.appVersion());
+        this.session = new SttkSessionStrategy(onboarding::keyStore, config.appVersion(), skipEncryption);
     }
 
     /** @return the underlying onboarding strategy (e.g. to inspect the key store). */

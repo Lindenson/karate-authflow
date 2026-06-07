@@ -47,6 +47,6 @@ Feature: onboard then change device language under STTK (live, cleartext)
 
     # --- working flow under STTK ---
     Given path '/api/v1/devices/language'
-    And request { language: 'en-US' }
+    And request { language: 'en' }
     When method post
     Then status 200

@@ -137,29 +137,6 @@
     </build>
 
     <profiles>
-        <!-- Local-only: enable the STTK parity test against the real vendor crypto library.
-             The jar is private (not on Maven Central), so it is added in test scope here and the
-             parity test is reflection-guarded — without this profile the test self-skips and the
-             default build (CI) needs no vendor jar. Run: `mvn test -Pparity`. -->
-        <profile>
-            <id>parity</id>
-            <dependencies>
-                <dependency>
-                    <groupId>ua.com.cartsys.transenix</groupId>
-                    <artifactId>transenix-crypto</artifactId>
-                    <version>3.6.1</version>
-                    <scope>test</scope>
-                </dependency>
-                <!-- transenix-crypto's minimal pom omits these; its static init needs Bouncy Castle. -->
-                <dependency>
-                    <groupId>org.bouncycastle</groupId>
-                    <artifactId>bcpkix-jdk18on</artifactId>
-                    <version>1.78.1</version>
-                    <scope>test</scope>
-                </dependency>
-            </dependencies>
-        </profile>
-
         <!-- Activated only for releases: builds sources/javadoc jars, signs artifacts,
              and configures publishing to Maven Central (Sonatype Central Portal).
              A normal `mvn verify` stays fast and unsigned. -->

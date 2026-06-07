@@ -172,6 +172,67 @@ accounts use a server-side fixed OTP and pass it with `otp(...)`.
 > Verified end-to-end against a live crypto-backend sandbox (both flavors), and
 > hermetically in CI against an in-process `FakeCryptoBackend`.
 
+### Session crypto (STTK) — working-flow endpoints
+
+Onboarding is only the door. Once a device is onboarded, every *working* request
+(change language, fetch config, post a transaction, …) is protected by a
+**per-request session layer** the plugin derives and applies transparently. The
+running example endpoint is `POST /api/v1/devices/language` with a cleartext body
+`{ language: 'en' }`.
+
+`OnboardingSessionFlow` is a single composite strategy that routes by URL:
+onboarding endpoints go through `EncryptedOnboardingStrategy` (RGK), everything
+else through `SttkSessionStrategy` (the session layer) — both sharing the same
+per-scenario `OnboardingKeyStore`. You register it once and write a plain feature
+that onboards and then calls the working endpoint; the crypto is invisible.
+
+```java
+EncryptedOnboardingConfig config = EncryptedOnboardingConfig.builder()
+        .flavor(OnboardingFlavor.HANDSHAKE)
+        .appVersion(100_005_000)
+        .build();
+OnboardingSessionFlow flow = new OnboardingSessionFlow(config);   // onboard + session in one
+
+Results results = KarateAuth
+        .register(Runner.path("classpath:journey.feature"), flow, flow)
+        .parallel(5);
+```
+
+```gherkin
+# journey.feature — 100% cleartext, no crypto, no base64, no key handling
+Given path '/api/v1/init/initial_handshake_key'   # ... onboarding steps ...
+...
+# working flow — transparently wrapped in the session envelope both ways:
+Given path '/api/v1/devices/language'
+And request { language: 'en' }
+When method post
+Then status 200
+```
+
+**What the session layer does per request** (all pure JCE, no native/vendor code):
+
+1. Derives a fresh session key pair from the onboarding master keys and a
+   per-request id: `sessionId = hex(rid)`, `STTK = HMAC-SHA256(masterTransportKey, sessionId)`,
+   `STMK = HMAC-SHA256(masterMacKey, sessionId)`.
+2. Encrypts the cleartext body under `STTK` (AES/CBC) → the `ed` field.
+3. Computes a message authentication code `mccd = base64(HMAC-SHA256(STMK, ed)[0..15])`.
+4. Builds the request envelope `{ rid, v, dsn, ed, mccd }`.
+5. On the response, verifies the server MAC (`mcc`) with `STMK` and decrypts the
+   `ecd` field with `STTK`, so `match response.X` sees plaintext.
+
+Two operating modes, selected at registration:
+
+| Mode | How to enable | Wire shape | When to use |
+|---|---|---|---|
+| **Full encryption** | `new OnboardingSessionFlow(config, false)` | `ed` = AES ciphertext, `mccd` = real STTK/STMK MAC, response MAC verified | production-equivalent crypto |
+| **Skip-encryption** (test build) | `new OnboardingSessionFlow(config)` (default) | `ed` = base64(plaintext), MAC skipped server-side | backends running in a test build that bypasses session crypto |
+
+> Both modes are proven end-to-end against a live backend (full-encryption
+> `devices/language` returns a decrypted live response and the request/response
+> MACs match), and hermetically against the in-process `FakeCryptoBackend`. The
+> session crypto is reproduced in plain JCE and validated byte-for-byte against a
+> reference implementation.
+
 ## Authentication scenarios
 
 | Scenario | What it does | Status |
@@ -179,6 +240,7 @@ accounts use a server-side fixed OTP and pass it with `otp(...)`.
 | **Basic** | Inject an `Authorization: Basic` header on every request | ✅ available |
 | **Session (Ory Kratos)** | Log in once via the Kratos browser flow, reuse the `ory_kratos_session` cookie on every request | ✅ available |
 | **Crypto onboarding (crypto backend)** 🔑 | Drive the encrypted device-onboarding flow (RGK envelope, RSA/AES, master-key capture) from cleartext features | ✅ available |
+| **Session crypto (STTK)** 🔑 | Per-request session-key derivation (HMAC), AES body encryption + MAC, and response decrypt/verify on working-flow endpoints | ✅ available |
 | **Bearer / token** | Inject a bearer token | planned |
 | **Session refresh** | Re-login automatically on `401` | planned |
 | **Crypto (generic)** | Pluggable session-key derivation + selective JSON-field encryption / body signing | planned |

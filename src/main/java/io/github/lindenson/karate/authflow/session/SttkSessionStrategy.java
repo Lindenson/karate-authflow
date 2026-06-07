@@ -37,16 +37,19 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 /**
- * Drives STTK-protected working-flow endpoints from cleartext features, using the session keys
- * derived from the onboarding master keys.
+ * Drives STTK working-flow endpoints (e.g. {@code POST /api/v1/devices/language}) from cleartext
+ * features, building the {@code FullGeneralRequest} envelope and decoding the response.
  *
- * <p>Per request: generate a {@code rid}, derive {@code STTK}/{@code STMK} from the (RGK-unwrapped)
- * master keys and {@code sessionId = Hex(rid)}, encrypt the body into {@code ed}, MAC it into
- * {@code mccd}, and assemble a {@code FullGeneralRequest} envelope. Per response: verify {@code mcc}
- * and decrypt {@code ecd} so the scenario asserts on cleartext.
- *
- * <p>The onboarding result (RGK, master keys, deviceSn) is read from the scenario's
- * {@link OnboardingKeyStore} via the supplied lookup; a request before onboarding fails loudly.
+ * <p>Two modes:
+ * <ul>
+ *   <li><b>skip-encryption</b> ({@code se=true}, the TEST-build path): {@code ed} is base64 of the
+ *       cleartext (no AES) and the server skips the request MAC. This is what the TEST-build client
+ *       sends and what the server's FULL pipeline validates today.</li>
+ *   <li><b>encrypted</b>: full STTK — per-{@code rid} {@code STTK}/{@code STMK} derived from the
+ *       onboarding master keys, {@code ed} AES-encrypted, {@code mccd} = STMK MAC; response {@code mcc}
+ *       verified and {@code ecd} decrypted. (Requires the server FULL pipeline to read {@code mccd}.)</li>
+ * </ul>
+ * Either way the master keys / {@code deviceSn} come from the scenario's {@link OnboardingKeyStore}.
  */
 public final class SttkSessionStrategy implements PreRequestInterceptor, PostResponseInterceptor {
 
@@ -54,15 +57,18 @@ public final class SttkSessionStrategy implements PreRequestInterceptor, PostRes
 
     private final Function<String, OnboardingKeyStore> keyStores;
     private final int appVersion;
+    private final boolean skipEncryption;
 
-    /** scenarioId → {mttkRaw, mtmkRaw} (unwrapped once per scenario). */
+    /** scenarioId → {mttkRaw, mtmkRaw}; only used in encrypted mode. */
     private final ConcurrentHashMap<String, byte[][]> masterRaw = new ConcurrentHashMap<>();
-    /** scenarioId → {STTK, STMK} for the in-flight request. */
+    /** scenarioId → {STTK, STMK} for the in-flight request (encrypted mode), or marker for skip mode. */
     private final ConcurrentHashMap<String, byte[][]> pendingSession = new ConcurrentHashMap<>();
+    private static final byte[][] SKIP_MARKER = new byte[0][];
 
-    public SttkSessionStrategy(Function<String, OnboardingKeyStore> keyStores, int appVersion) {
+    public SttkSessionStrategy(Function<String, OnboardingKeyStore> keyStores, int appVersion, boolean skipEncryption) {
         this.keyStores = Objects.requireNonNull(keyStores, "keyStores");
         this.appVersion = appVersion;
+        this.skipEncryption = skipEncryption;
     }
 
     @Override
@@ -71,29 +77,36 @@ public final class SttkSessionStrategy implements PreRequestInterceptor, PostRes
         if (store == null) {
             throw new OnboardingNotReady();
         }
-        store.requireOnboarded(); // throws OnboardingException.NotOnboarded if not done
-
-        byte[][] master = masterRaw.computeIfAbsent(request.scenarioId(), k -> new byte[][]{
-                SttkCryptoCodec.unwrapMasterKeyUnderRgk(hexDecode(store.mttk()), store.rgk()),
-                SttkCryptoCodec.unwrapMasterKeyUnderRgk(hexDecode(store.mtmk()), store.rgk())
-        });
+        store.requireOnboarded(); // ensures deviceSn + master keys exist
 
         String rid = UUID.randomUUID().toString();
-        byte[] sessionId = SttkCryptoCodec.sessionId(rid);
-        byte[] sttk = SttkCryptoCodec.deriveSttk(master[0], sessionId);
-        byte[] stmk = SttkCryptoCodec.deriveStmk(master[1], sessionId);
-        pendingSession.put(request.scenarioId(), new byte[][]{sttk, stmk});
-
-        byte[] ciphertext = RgkCryptoCodec.encryptUnderRgk(utf8(request.bodyAsString()), sttk);
-        byte[] edInner = utf8(Base64.getEncoder().encodeToString(ciphertext));
-        String mac = SttkCryptoCodec.mac(stmk, ciphertext);
-
         ObjectNode envelope = MAPPER.createObjectNode();
         envelope.put("rid", utf8(rid));
         envelope.put("v", ByteBuffer.allocate(4).putInt(appVersion).array());
         envelope.put("dsn", utf8(store.deviceSn()));
-        envelope.put("ed", edInner);
-        envelope.put("mccd", utf8(mac));
+
+        byte[] cleartext = utf8(request.bodyAsString());
+        if (skipEncryption) {
+            envelope.put("se", utf8("true"));
+            envelope.put("ed", utf8(Base64.getEncoder().encodeToString(cleartext))); // base64(plaintext), no AES
+            // mccd is @NotNull @Size(24) on the envelope; the MAC is skipped under se=true, so a
+            // 24-byte placeholder (base64 of 16 zero bytes) satisfies validation.
+            envelope.put("mccd", utf8(Base64.getEncoder().encodeToString(new byte[16])));
+            pendingSession.put(request.scenarioId(), SKIP_MARKER);
+        } else {
+            byte[][] master = masterRaw.computeIfAbsent(request.scenarioId(), k -> new byte[][]{
+                    SttkCryptoCodec.unwrapMasterKeyUnderRgk(hexDecode(store.mttk()), store.rgk()),
+                    SttkCryptoCodec.unwrapMasterKeyUnderRgk(hexDecode(store.mtmk()), store.rgk())
+            });
+            byte[] sessionId = SttkCryptoCodec.sessionId(rid);
+            byte[] sttk = SttkCryptoCodec.deriveSttk(master[0], sessionId);
+            byte[] stmk = SttkCryptoCodec.deriveStmk(master[1], sessionId);
+            pendingSession.put(request.scenarioId(), new byte[][]{sttk, stmk});
+
+            byte[] ciphertext = RgkCryptoCodec.encryptUnderRgk(cleartext, sttk);
+            envelope.put("ed", utf8(Base64.getEncoder().encodeToString(ciphertext)));
+            envelope.put("mccd", utf8(SttkCryptoCodec.mac(stmk, ciphertext)));
+        }
         request.body(toBytes(envelope));
     }
 
@@ -101,7 +114,7 @@ public final class SttkSessionStrategy implements PreRequestInterceptor, PostRes
     public void intercept(AuthResponse response) {
         byte[][] session = pendingSession.remove(response.scenarioId());
         if (session == null) {
-            return; // a response for a request we did not transform
+            return;
         }
         JsonNode envelope = readTree(response.bodyAsString());
         String ecd = envelope.path("ecd").asText(null);
@@ -111,6 +124,10 @@ public final class SttkSessionStrategy implements PreRequestInterceptor, PostRes
         }
         byte[] ciphertext = Base64.getDecoder().decode(ecd);
 
+        if (session == SKIP_MARKER) {
+            response.body(ciphertext); // se=true: ecd is base64(plaintext); decoded bytes are the cleartext
+            return;
+        }
         String mcc = envelope.path("mcc").asText(null);
         if (mcc != null && !mcc.isEmpty() && !SttkCryptoCodec.mac(session[1], ciphertext).equals(mcc)) {
             throw new SessionException("STTK response MAC (mcc) mismatch");
