@@ -137,9 +137,10 @@ covers the whole journey — onboard a device, then call working endpoints like
 `POST /api/v1/devices/language` — with all crypto handled transparently in both
 directions.
 
-📖 **Full algorithms, wire format, configuration and the two operating modes are
-documented in [onboarding.md](onboarding.md).** A runnable, zero-setup demo of the
-entire journey is in [`examples/`](examples) (`OnboardingExample`).
+📖 **Full algorithms, wire format, key derivation and the two operating modes are
+documented in [examples/ONBOARDING.md](examples/ONBOARDING.md)** — a step-by-step
+walkthrough of the runnable, zero-setup demo in [`examples/`](examples)
+(`OnboardingExample`: onboard → session keys → `devices/language`).
 
 ## Authentication scenarios
 

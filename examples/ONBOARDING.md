@@ -1,13 +1,21 @@
-# Encrypted device onboarding — how the example works
+# Encrypted device onboarding & STTK session — how the example works
 
 This walks through [`OnboardingExample`](src/test/java/io/github/lindenson/karate/authflow/examples/OnboardingExample.java)
 step by step: the exact JSON on the wire at each step, which classes and methods do
-the work, and where the master keys end up for later flows.
+the work, how the master keys are captured, and how they drive the **session layer**
+that protects a working-flow endpoint (`POST /api/v1/devices/language`).
 
 Unlike the Basic or Kratos examples (one header / one cookie), this is a **stateful,
-multi-step, encrypted** flow. The point of `karate-authflow` here is that the
-`.feature` file stays **cleartext** — the strategy does all the crypto and envelope
-work, in both directions.
+multi-step, encrypted** flow with **two crypto layers**:
+
+1. **Onboarding (RGK)** — 4 steps that exchange a key and capture the master keys
+   `mTTK` / `mTMK` (§2–§4).
+2. **Session (STTK)** — every subsequent working request derives a fresh per-request
+   session key from those master keys, encrypts the body, and MACs it (§5).
+
+The point of `karate-authflow` is that the `.feature` file stays **cleartext** end to
+end — the plugin does all the crypto and envelope work, in both directions, for both
+layers.
 
 ---
 
@@ -15,22 +23,25 @@ work, in both directions.
 
 | Class | Role |
 |---|---|
-| `EncryptedOnboardingStrategy` | The brain. Implements **both** `PreRequestInterceptor` (encrypt the request) and `PostResponseInterceptor` (decrypt the response). Routes each call to a step, enforces order, holds per-scenario state. |
+| `OnboardingSessionFlow` | The composite the example registers. Routes by URL: onboarding endpoints → `EncryptedOnboardingStrategy` (RGK), everything else → `SttkSessionStrategy` (STTK). Shares one `OnboardingKeyStore` per scenario. |
+| `EncryptedOnboardingStrategy` | The onboarding brain. Implements **both** `PreRequestInterceptor` (encrypt the request) and `PostResponseInterceptor` (decrypt the response). Routes each call to a step, enforces order, holds per-scenario state. |
+| `SttkSessionStrategy` | The session brain. Per request: derive `STTK`/`STMK`, encrypt the body (`ed`), MAC it (`mccd`); on the response verify `mcc` and decrypt `ecd`. |
 | `EncryptedOnboardingConfig` | Immutable config: flavor, app version, built-in server public key + key ref (`STANDARD`), RGK size, and the fixed/`otpSupplier` OTP. |
-| `RgkCryptoCodec` | Pure-JCE crypto: RGK generation (AES-128), RSA-wrap of the RGK, AES-CBC of payloads, and the base64 "matryoshka" helpers. |
+| `RgkCryptoCodec` | Pure-JCE crypto: RGK generation (AES-128), RSA-wrap of the RGK, AES-CBC of payloads, and the base64 "matryoshka" helpers. Reused for STTK payload AES. |
+| `SttkCryptoCodec` | Pure-JCE session crypto: unwrap master keys under the RGK, derive `STTK`/`STMK` (`HmacSHA256`), compute the MAC. |
 | `OnboardingKeyStore` | Per-scenario state: `rid`, `rgk`, `deviceSn`, completed steps, and the captured `mTMK` / `mTTK`. |
 | `OnboardingFlavor` | `STANDARD` (4 steps, built-in key) or `HANDSHAKE` (5 steps, Step 0 fetches the key). The example uses `STANDARD`. |
-| `KarateAuth.register(builder, pre, post)` | Wires the strategy into Karate as both interceptors (one line). |
-| `FakeCryptoBackend` | **Example only** — an in-process server doing the real server-side crypto so the example needs no network/Docker. |
+| `KarateAuth.register(builder, pre, post)` | Wires the composite into Karate as both interceptors (one line). |
+| `FakeCryptoBackend` | **Example only** — an in-process server doing the real server-side crypto for **both** layers (RGK onboarding + STTK language) so the example needs no network/Docker. |
 
 How it plugs into Karate (the seam, in package `…authflow.spi`):
 
 ```
-KarateAuth.register(runner, strategy, strategy)
+KarateAuth.register(runner, flow, flow)          // flow = OnboardingSessionFlow
         │
         ▼
-KarateV1Binding  ──►  RuntimeHook.beforeHttpCall(req) ─► strategy.intercept(AuthRequest)   // encrypt
-                 └─►  RuntimeHook.afterHttpCall(resp) ─► strategy.intercept(AuthResponse)  // decrypt
+KarateV1Binding  ──►  RuntimeHook.beforeHttpCall(req) ─► flow.intercept(AuthRequest)   // encrypt (RGK or STTK)
+                 └─►  RuntimeHook.afterHttpCall(resp) ─► flow.intercept(AuthResponse)  // decrypt (RGK or STTK)
 ```
 
 `AuthRequest` / `AuthResponse` are Karate-agnostic mutable views; `scenarioId()`
@@ -151,16 +162,19 @@ base64 — then encrypt → `ed` (+ `rid` + `dsn`).
 
 **Strategy:** strings/enums, encrypt → `ed` (+ `rid` + `dsn`).
 
-**Wire response:**
+**Wire response** — the master keys are delivered **wrapped under the RGK and
+hex-encoded** (`hex( AES/ECB/NoPadding(RGK, masterRaw) )`), exactly as the real
+backend does, so only this device can recover them:
 ```json
-{ "reid": "…", "ecd": "b64( AES-RGK( {\"mttk\":\"demo-master-traffic-key\",\"mtmk\":\"demo-master-mac-key\"} ) )" }
+{ "reid": "…", "ecd": "b64( AES-RGK( {\"mttk\":\"<hex…>\",\"mtmk\":\"<hex…>\"} ) )" }
 ```
-**Strategy:** decrypts, then `OnboardingKeyStore.captureMasterKeys(mtmk, mttk)` →
-status `ONBOARDED`.
+**Strategy:** decrypts `ecd`, then `OnboardingKeyStore.captureMasterKeys(mtmk, mttk)`
+(still wrapped/hex) → status `ONBOARDED`. The keys are **unwrapped** lazily by the
+session layer (§5), not here.
 
 **Decrypted response the scenario sees:**
 ```json
-{ "mttk": "demo-master-traffic-key", "mtmk": "demo-master-mac-key" }
+{ "mttk": "<hex…>", "mtmk": "<hex…>" }
 ```
 ```gherkin
 Then status 200
@@ -194,12 +208,82 @@ keys.rid();       // sticky request id
 - **`requireOnboarded()`** throws `OnboardingException.NotOnboarded` if called before
   Step 4 completed — a follow-up flow fails loudly rather than running unauthenticated.
 
-This is the seam between onboarding and the next layer: a transaction strategy reads
-`requireOnboarded()` and derives its session keys (`STTK`/`SPTK`) from `mTMK`/`mTTK`.
+This is the seam between onboarding and the next layer: `SttkSessionStrategy` reads
+`requireOnboarded()` and derives its session keys (`STTK`/`STMK`) from `mTMK`/`mTTK`
+— which is exactly what Step 5 below does.
 
 ---
 
-## 5. Safety rails
+## 5. Step 5 — `POST /api/v1/devices/language` (the STTK session layer)
+
+Onboarding is only the door. The fifth step is a **working-flow** request, protected
+not by the RGK but by a **per-request session key** derived from the master keys.
+Because `OnboardingSessionFlow` routes by URL, this call goes to `SttkSessionStrategy`
+automatically — the feature author writes nothing special:
+
+```gherkin
+Given path '/api/v1/devices/language'
+And request { language: 'en' }
+When method post
+Then status 200
+```
+
+### Key derivation (`SttkCryptoCodec`)
+
+The master keys were captured **wrapped under the RGK and hex-encoded** (Step 4). On
+the first session request the strategy unwraps them once per scenario, then derives a
+**fresh per-request** key pair:
+
+```
+mttkRaw  = AES/ECB/NoPadding-decrypt(RGK, hexDecode(mttk))      # unwrap, once per scenario
+mtmkRaw  = AES/ECB/NoPadding-decrypt(RGK, hexDecode(mtmk))
+sessionId = hex(rid)                                            # 16 bytes from a fresh request UUID
+STTK = HmacSHA256(mttkRaw, sessionId)                           # 32 bytes → AES-256 encryption key
+STMK = HmacSHA256(mtmkRaw, sessionId)                           # session MAC key
+```
+
+`rid` is regenerated for every request, so `STTK`/`STMK` are one-time per call.
+
+### Wire request (`intercept(AuthRequest)`)
+
+The example uses **full encryption** (`new OnboardingSessionFlow(config, false)`):
+
+1. Encrypt `{ "language": "en" }` under `STTK` (`AES/CBC/PKCS5Padding`, zero IV) → `ed`.
+2. MAC the ciphertext: `mccd = b64( HmacSHA256(STMK, ed-ciphertext)[0..15] )`.
+
+```json
+{
+  "rid":  "b64('…uuid…')",
+  "v":    "b64(int32: 100005000)",
+  "dsn":  "b64( deviceSn-token )",
+  "ed":   "b64( b64( AES-STTK( {\"language\":\"en\"} ) ) )",
+  "mccd": "b64( b64-mac )"
+}
+```
+
+### Server side (`FakeCryptoBackend.language`)
+
+The fake re-derives the same `STTK`/`STMK` from the master keys it issued + `rid`,
+**verifies `mccd`**, decrypts `ed`, then replies with an encrypted, MAC'd envelope:
+
+```json
+{ "reid": "…uuid…", "ecd": "b64( AES-STTK( {} ) )", "mcc": "b64-mac" }
+```
+
+### Wire response (`intercept(AuthResponse)`)
+
+The strategy verifies `mcc` with `STMK`, decrypts `ecd` with `STTK`, and hands the
+scenario the plaintext — so `Then status 200` (and any `match response.X`) works on
+cleartext. A MAC mismatch throws and fails the scenario loudly.
+
+> **Two modes.** The example runs full encryption. The single-arg constructor
+> `new OnboardingSessionFlow(config)` selects **skip-encryption** (`se=true`): `ed`
+> is `b64(plaintext)` and the server skips the MAC — the path a test-build backend
+> uses. Same feature, same code, no other change.
+
+---
+
+## 6. Safety rails
 
 - **Step order** is enforced from the route table; a step whose prerequisites are
   missing fails with `OnboardingException.OutOfOrder` *before* anything is sent.
@@ -212,7 +296,7 @@ This is the seam between onboarding and the next layer: a transaction strategy r
 
 ---
 
-## 6. Run it
+## 7. Run it
 
 ```bash
 # from the repo root, once:
@@ -223,7 +307,9 @@ mvn -q test -Dtest=OnboardingExample
 ```
 
 No network, no Docker — the in-process `FakeCryptoBackend` performs the real
-server-side crypto (RSA-unwrap the RGK, AES-decrypt the payload, AES-encrypt the
-response), so the whole flow runs end-to-end locally. To target a real backend,
-drop `FakeCryptoBackend` and configure the strategy with the real base URL,
-credentials, server public key (or `HANDSHAKE` flavor), and a valid app version.
+server-side crypto for both layers (RGK: RSA-unwrap, AES-decrypt/encrypt; STTK:
+re-derive the session keys, verify the request MAC, decrypt, encrypt + MAC the
+response), so the whole journey — onboard → session keys → language — runs
+end-to-end locally. To target a real backend, drop `FakeCryptoBackend` and configure
+the flow with the real base URL, credentials, server public key (or `HANDSHAKE`
+flavor), and a valid app version.
