@@ -58,6 +58,8 @@ final class FakeCryptoBackend implements AutoCloseable {
 
     /** deviceSn token as the wire carries it: base64 of the SN bytes. */
     static final String DEVICE_SN_TOKEN = Base64.getEncoder().encodeToString("DEMO-DEVICE-1".getBytes(StandardCharsets.UTF_8));
+    /** One-time challenge nonce the key-attestation step hands back. */
+    static final String CHALLENGE_NONCE = "demo-challenge-nonce-0001";
 
     private final HttpServer server;
     private final String baseUrl;
@@ -79,6 +81,8 @@ final class FakeCryptoBackend implements AutoCloseable {
         server.createContext("/api/v1/init/otp/confirm-otp", this::emptyOk);
         server.createContext("/api/v1/init/access-code/register", this::accessCode);
         server.createContext("/api/v1/devices/language", this::language);
+        server.createContext("/api/v1/key-attestation/attestation-challenge", this::attestationChallenge);
+        server.createContext("/api/v1/key-attestation/attestation-challenge-check", this::attestationCheck);
         server.createContext("/api/v1/init", this::init);
         server.setExecutor(null);
         server.start();
@@ -158,12 +162,28 @@ final class FakeCryptoBackend implements AutoCloseable {
 
     // ------------------------------------------------------------------ session (STTK)
 
-    /**
-     * {@code POST /api/v1/devices/language} under the per-request session key. Re-derives
-     * {@code STTK}/{@code STMK} from the issued master keys and {@code rid}, verifies the request
-     * MAC, decrypts the body, and returns an encrypted + MAC'd response.
-     */
+    /** {@code POST /api/v1/devices/language} — accept the language change, reply with an empty body. */
     private void language(HttpExchange ex) throws IOException {
+        sttk(ex, req -> "{}");
+    }
+
+    /** {@code POST /api/v1/key-attestation/attestation-challenge} — hand back a one-time nonce. */
+    private void attestationChallenge(HttpExchange ex) throws IOException {
+        sttk(ex, req -> "{\"cllge\":\"" + CHALLENGE_NONCE + "\"}");
+    }
+
+    /** {@code POST /api/v1/key-attestation/attestation-challenge-check} — report attestation success. */
+    private void attestationCheck(HttpExchange ex) throws IOException {
+        sttk(ex, req -> "{\"isDa\":true}");
+    }
+
+    /**
+     * Shared STTK working-flow handler. Re-derives {@code STTK}/{@code STMK} from the issued master
+     * keys and the request {@code rid}, verifies the request MAC ({@code mccd}), decrypts {@code ed},
+     * then encrypts + MACs the response the {@code responder} builds from the decrypted request JSON.
+     * Every STTK endpoint (language, key-attestation, …) is this same envelope with a different body.
+     */
+    private void sttk(HttpExchange ex, java.util.function.Function<String, String> responder) throws IOException {
         try {
             JsonNode env = MAPPER.readTree(readBody(ex));
             String rid = dtoString(env.path("rid").asText());
@@ -172,15 +192,14 @@ final class FakeCryptoBackend implements AutoCloseable {
             byte[] stmk = SttkCryptoCodec.deriveStmk(masterTmkRaw, sessionId);
 
             byte[] ciphertext = innerBinary(env.path("ed").asText());
-            String mccd = dtoString(env.path("mccd").asText());
-            if (!SttkCryptoCodec.mac(stmk, ciphertext).equals(mccd)) {
+            if (!SttkCryptoCodec.mac(stmk, ciphertext).equals(dtoString(env.path("mccd").asText()))) {
                 respond(ex, 500, "{\"errorCode\":\"3307\",\"errorText\":\"Cryptography error\"}");
                 return;
             }
-            // request body (e.g. {"language":"en"}) decrypts cleanly — accepted.
-            RgkCryptoCodec.decryptUnderRgk(ciphertext, sttk);
+            String requestJson = new String(RgkCryptoCodec.decryptUnderRgk(ciphertext, sttk), StandardCharsets.UTF_8);
 
-            byte[] respCipher = RgkCryptoCodec.encryptUnderRgk("{}".getBytes(StandardCharsets.UTF_8), sttk);
+            byte[] respCipher = RgkCryptoCodec.encryptUnderRgk(
+                    responder.apply(requestJson).getBytes(StandardCharsets.UTF_8), sttk);
             String ecd = Base64.getEncoder().encodeToString(respCipher);
             String mcc = SttkCryptoCodec.mac(stmk, respCipher);
             respond(ex, 200, "{\"reid\":\"" + rid + "\",\"ecd\":\"" + ecd + "\",\"mcc\":\"" + mcc + "\"}");

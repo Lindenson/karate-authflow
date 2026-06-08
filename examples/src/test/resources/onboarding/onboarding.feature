@@ -9,7 +9,7 @@ Feature: encrypted device onboarding + STTK working flow via karate-authflow
   Background:
     * url karate.properties['backend.base']
 
-  Scenario: a device onboards (handshake), receives master keys, then changes its language under STTK
+  Scenario: a device onboards (handshake), then runs STTK working flows — language + key attestation
 
     # Step 0 — handshake: fetch the crypto-backend public key (HANDSHAKE flavor, 5 steps)
     Given path '/api/v1/init/initial_handshake_key'
@@ -60,3 +60,19 @@ Feature: encrypted device onboarding + STTK working flow via karate-authflow
     And request { language: 'en' }
     When method post
     Then status 200
+
+    # Step 6 — key-attestation challenge (same STTK envelope, different payload):
+    # ask the backend for a one-time nonce to embed in the PIN key's attestation.
+    Given path '/api/v1/key-attestation/attestation-challenge'
+    And request { deId: 'a1b2c3d4e5f6a1b2' }
+    When method post
+    Then status 200
+    And match response.cllge == '#string'
+
+    # Step 7 — key-attestation check: submit the PIN key's certificate chain + DSN;
+    # the backend validates the hardware attestation against the issued challenge.
+    Given path '/api/v1/key-attestation/attestation-challenge-check'
+    And request { crticChn: 'MIIBdemoCertChainBase64==', dsna: 'DEMO-DEVICE-1' }
+    When method post
+    Then status 200
+    And match response.isDa == true
