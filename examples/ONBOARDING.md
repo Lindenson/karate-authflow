@@ -168,7 +168,7 @@ server‑side), encrypt → `ed`, attach the `dsn` from Step 1.
 
 **Strategy:** if `config.otp("…")`/`otpSupplier(...)` is set, it **overrides** the
 `otp` field with the configured value (here `000000`). All fields are strings — no
-base64 — then encrypt → `ed` (+ `rid` + `dsn`).
+base64 — then encrypt → `ed` (+ `rid` + `v` + `dsn`).
 
 **Wire response:** `ecd` of `{}` → **decrypted:** `{}` → `status 200`.
 
@@ -176,7 +176,7 @@ base64 — then encrypt → `ed` (+ `rid` + `dsn`).
 
 **Feature writes:** `{ "acd": "9999", "otp": "VERIFY", "atp": "CODE" }`
 
-**Strategy:** strings/enums, encrypt → `ed` (+ `rid` + `dsn`).
+**Strategy:** strings/enums, encrypt → `ed` (+ `rid` + `v` + `dsn`).
 
 **Wire response** — the master keys are delivered **wrapped under the RGK and
 hex-encoded** (`hex( AES/ECB/NoPadding(RGK, masterRaw) )`), exactly as the real
