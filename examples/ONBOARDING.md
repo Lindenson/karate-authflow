@@ -297,29 +297,6 @@ cleartext. A MAC mismatch throws and fails the scenario loudly.
 > is `b64(plaintext)` and the server skips the MAC — the path a test-build backend
 > uses. Same feature, same code, no other change.
 
-### Every working endpoint reuses the same envelope (Steps 6–7: key attestation)
-
-Once the session is up, *any* working call is the **same STTK envelope** with a
-different payload — `SttkSessionStrategy` routes every non-onboarding URL through it,
-so the plugin neither knows nor cares what the JSON is. After the language change the
-example continues with the **key-attestation** pair (hardware-backed PIN key):
-
-| Step | Endpoint | Request (cleartext) | Decrypted response |
-|---|---|---|---|
-| 6 | `POST /api/v1/key-attestation/attestation-challenge` | `{ "deId": "<hex androidId>" }` | `{ "cllge": "<one-time nonce>" }` |
-| 7 | `POST /api/v1/key-attestation/attestation-challenge-check` | `{ "crticChn": "<key cert chain>", "dsna": "<deviceSn>" }` | `{ "isDa": true }` |
-
-The device requests a challenge nonce (Step 6), embeds it into the attestation of an
-RSA key generated in the Android Keystore, then submits that key's certificate chain
-for the backend to verify against the issued challenge (Step 7); `isDa = true` means
-attestation passed. Both calls go through the identical derive → encrypt `ed` → MAC
-`mccd` → verify `mcc` → decrypt `ecd` flow as the language call — the feature only
-writes cleartext and asserts `response.cllge` / `response.isDa`.
-
-> In the example, `FakeCryptoBackend` returns a fixed nonce and `isDa: true`. Against a
-> real backend Step 7 needs a genuine hardware-attested certificate chain, so it is a
-> hermetic-only demonstration (the language call also runs live).
-
 ---
 
 ## 6. Safety rails
