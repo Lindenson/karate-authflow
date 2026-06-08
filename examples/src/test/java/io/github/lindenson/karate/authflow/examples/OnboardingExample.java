@@ -48,10 +48,8 @@ class OnboardingExample {
             System.setProperty("backend.base", backend.baseUrl());
             try {
                 EncryptedOnboardingConfig config = EncryptedOnboardingConfig.builder()
-                        .flavor(OnboardingFlavor.STANDARD)
+                        .flavor(OnboardingFlavor.HANDSHAKE)   // 5 steps: Step 0 fetches the server key
                         .appVersion(100_005_000)
-                        .builtInServerKey(backend.serverPublicKeyX509())
-                        .builtInPkr("demo-pkr")
                         .otp("000000")
                         .build();
                 // false = full STTK encryption on working-flow endpoints (request AES + MAC,

@@ -9,7 +9,13 @@ Feature: encrypted device onboarding + STTK working flow via karate-authflow
   Background:
     * url karate.properties['backend.base']
 
-  Scenario: a device onboards, receives master keys, then changes its language under STTK
+  Scenario: a device onboards (handshake), receives master keys, then changes its language under STTK
+
+    # Step 0 — handshake: fetch the crypto-backend public key (HANDSHAKE flavor, 5 steps)
+    Given path '/api/v1/init/initial_handshake_key'
+    And request { dfrgprt: 'fingerprint-123' }
+    When method post
+    Then status 200
 
     # Step 1 — init (RGK exchange + device info)
     Given path '/api/v1/init'

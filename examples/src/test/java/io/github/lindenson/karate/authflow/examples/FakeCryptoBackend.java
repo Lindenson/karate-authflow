@@ -74,6 +74,7 @@ final class FakeCryptoBackend implements AutoCloseable {
         this.backend = kpg.generateKeyPair();
         this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         this.baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
+        server.createContext("/api/v1/init/initial_handshake_key", this::handshake);
         server.createContext("/api/v1/init/credentials", this::emptyOk);
         server.createContext("/api/v1/init/otp/confirm-otp", this::emptyOk);
         server.createContext("/api/v1/init/access-code/register", this::accessCode);
@@ -93,6 +94,14 @@ final class FakeCryptoBackend implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------ onboarding (RGK)
+
+    /**
+     * HANDSHAKE Step 0: hand the device our public key (base64 X.509 DER) as {@code ihshky}. The
+     * device captures it and uses it to RSA-wrap the RGK at Step 1 (no built-in key needed).
+     */
+    private void handshake(HttpExchange ex) throws IOException {
+        respond(ex, 200, "{\"ihshky\":\"" + Base64.getEncoder().encodeToString(serverPublicKeyX509()) + "\"}");
+    }
 
     private void init(HttpExchange ex) throws IOException {
         try {

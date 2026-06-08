@@ -30,7 +30,7 @@ layers.
 | `RgkCryptoCodec` | Pure-JCE crypto: RGK generation (AES-128), RSA-wrap of the RGK, AES-CBC of payloads, and the base64 "matryoshka" helpers. Reused for STTK payload AES. |
 | `SttkCryptoCodec` | Pure-JCE session crypto: unwrap master keys under the RGK, derive `STTK`/`STMK` (`HmacSHA256`), compute the MAC. |
 | `OnboardingKeyStore` | Per-scenario state: `rid`, `rgk`, `deviceSn`, completed steps, and the captured `mTMK` / `mTTK`. |
-| `OnboardingFlavor` | `STANDARD` (4 steps, built-in key) or `HANDSHAKE` (5 steps, Step 0 fetches the key). The example uses `STANDARD`. |
+| `OnboardingFlavor` | `STANDARD` (4 steps, built-in key) or `HANDSHAKE` (5 steps, Step 0 fetches the key). The example uses `HANDSHAKE` — same as the real working flow. |
 | `KarateAuth.register(builder, pre, post)` | Wires the composite into Karate as both interceptors (one line). |
 | `FakeCryptoBackend` | **Example only** — an in-process server doing the real server-side crypto for **both** layers (RGK onboarding + STTK language) so the example needs no network/Docker. |
 
@@ -73,11 +73,27 @@ All of this lives in `RgkCryptoCodec`: `generateRgk`, `wrapRgk`, `buildRgkeField
 
 ---
 
-## 3. Step by step (STANDARD flavor, 4 steps)
+## 3. Step by step (HANDSHAKE flavor, 5 steps)
 
 > Notation: `b64(x)` = base64. The feature writes the **cleartext request**; the
 > strategy emits the **wire request**; the server replies with the **wire response**;
 > the strategy hands the scenario back the **decrypted response**.
+
+### Step 0 — `POST /api/v1/init/initial_handshake_key` (fetch the server key)
+
+The `HANDSHAKE` flavor opens by fetching the crypto-backend public key, so no key
+has to be built into the client.
+
+**Feature writes (cleartext):** `{ "dfrgprt": "fingerprint-123" }`
+
+**Strategy** (`rememberFingerprint`): keeps the fingerprint as `pkr` (the server stores
+the handshake key under it) and base64-encodes `dfrgprt` on the wire (it is a `byte[]`
+server-side). No RGK yet.
+
+**Wire response:** `{ "ihshky": "b64( server public key, X.509 DER )" }`
+
+**Strategy** (`captureServerKey`): base64-decodes `ihshky` into the server public key
+and stores it; Step 1 will RSA-wrap the RGK with it. Nothing is decrypted here.
 
 ### Step 1 — `POST /api/v1/init` (init: RGK exchange + device info)
 
@@ -94,7 +110,7 @@ All of this lives in `RgkCryptoCodec`: `generateRgk`, `wrapRgk`, `buildRgkeField
 
 **Strategy** (`intercept(AuthRequest)` → `buildInit`):
 1. Lazily generate the RGK (`RgkCryptoCodec.generateRgk(128)`) and a sticky `rid`
-   (UUID); pick the server public key + `pkr` (STANDARD → from config).
+   (UUID); use the server public key captured at Step 0 + `pkr` (the fingerprint).
 2. base64‑encode the inner fields the server models as `byte[]` — `fbrid` and every
    `dad.*` — leaving `dfrgprt` (string) and `lag` (enum) as‑is.
 3. Encrypt that JSON under the RGK → `ed`; wrap the RGK → `rgke`.
@@ -289,10 +305,11 @@ cleartext. A MAC mismatch throws and fails the scenario loudly.
   missing fails with `OnboardingException.OutOfOrder` *before* anything is sent.
 - **Unknown URLs** (anything outside the onboarding endpoints) fail with
   `OnboardingException.OutOfScope`.
-- **HANDSHAKE flavor** (5 steps): prepend `POST /api/v1/init/initial_handshake_key`
-  with `{ "dfrgprt": "<fingerprint>" }`; the strategy captures the returned server
-  public key (`ihshky`) and uses it to wrap the RGK at Step 1 — everything else is
-  identical. Select it with `OnboardingFlavor.HANDSHAKE` (no built-in key needed).
+- **STANDARD flavor** (4 steps): the alternative to the `HANDSHAKE` flavor this example
+  uses. It drops Step 0 and instead configures the server public key + key ref into the
+  strategy up front — `OnboardingFlavor.STANDARD` with `builtInServerKey(...)` and
+  `builtInPkr(...)`; the strategy then wraps the RGK with that built-in key at Step 1.
+  Everything from Step 1 on is identical.
 
 ---
 
